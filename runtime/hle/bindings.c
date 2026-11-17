@@ -258,7 +258,7 @@ bool bind_settings_load(const char *key, const char *val) {
     }
     if (!strncmp(key, "bind_mouse_", 11)) {  // bind_mouse_left = zr / none
         for (int m = 0; m < MOUSEB_COUNT; m++)
-            if (!strcmp(key + 11, k_mouse_ini[m])) g_bind_mouse[m] = (int16_t)(!strcmp(val, "aim") ? BIND_MOUSE_AIM : !strcmp(val, "party_toggle") ? BIND_MOUSE_PARTY_TOGGLE : strcmp(val, "none") ? bind_slot_from_name(val) : -1);
+            if (!strcmp(key + 11, k_mouse_ini[m])) g_bind_mouse[m] = (int16_t)(!strcmp(val, "aim") ? BIND_MOUSE_AIM : !strcmp(val, "party_toggle") ? BIND_MOUSE_PARTY_TOGGLE : !strcmp(val, "focus") ? BIND_MOUSE_FOCUS : strcmp(val, "none") ? bind_slot_from_name(val) : -1);
         for (int m = 0; m < MOUSEB_COUNT; m++)
             if (g_bind_mouse[m] >= BIND_PAD_COUNT) g_bind_mouse[m] = -1;  // (buttons only: not a stick direction)
         return true;
@@ -295,7 +295,7 @@ void bind_settings_save(FILE *f) {
         }
     for (int m = 0; m < MOUSEB_COUNT; m++)
         if (g_bind_mouse[m] != k_def_mouse[m])
-            fprintf(f, "bind_mouse_%s = %s\n", k_mouse_ini[m], g_bind_mouse[m] == BIND_MOUSE_AIM ? "aim" : g_bind_mouse[m] == BIND_MOUSE_PARTY_TOGGLE ? "party_toggle" : g_bind_mouse[m] >= 0 ? k_ini[g_bind_mouse[m]] : "none");
+            fprintf(f, "bind_mouse_%s = %s\n", k_mouse_ini[m], g_bind_mouse[m] == BIND_MOUSE_AIM ? "aim" : g_bind_mouse[m] == BIND_MOUSE_PARTY_TOGGLE ? "party_toggle" : g_bind_mouse[m] == BIND_MOUSE_FOCUS ? "focus" : g_bind_mouse[m] >= 0 ? k_ini[g_bind_mouse[m]] : "none");
 }
 
 // A token chooses one of the complete, already loaded key glyphs. Bindings
@@ -303,6 +303,8 @@ void bind_settings_save(FILE *f) {
 int bind_prompt_keyboard_token(int slot,int context){
     if(slot<0||slot>=BIND_KEY_COUNT)return 0;
     if(context==5&&slot==BIND_A)return 525;
+    // Change Moves: ZL / ZR are its tab keys (input.c switches the tabs with them), never the mouse aim / focus button.
+    if(context==7&&(slot==BIND_ZL||slot==BIND_ZR))return g_bind_key[slot]>0&&g_bind_key[slot]<512?g_bind_key[slot]:0;
     if(context==6&&(slot==BIND_L||slot==BIND_R))return slot==BIND_L?517:518;
     if(context==0&&g_settings.mouse_camera==MOUSE_CAM_CAPTURED){
         if(slot==BIND_LEFT||slot==BIND_RIGHT)return slot==BIND_LEFT?517:518;
