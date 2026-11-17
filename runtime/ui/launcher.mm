@@ -612,6 +612,45 @@ static std::string keys_in_dir(const std::string &dir, int kind, std::string *ba
     return "";
 }
 
+// Where Switch emulators already installed on this machine keep the player's keys (after the picked folder and keys/:
+// a prod.keys put next to the game wins). Ryujinx: <config>/Ryujinx/system; yuzu and its forks (suyu, sudachi,
+// citron, torzu, Eden): <data>/<name>/keys - %APPDATA% on Windows, $XDG_CONFIG_HOME / $XDG_DATA_HOME (~/.config,
+// ~/.local/share) on Linux, Application Support on macOS - and inside any Flatpak's sandbox (~/.var/app/<id>/config
+// and /data: the app id differs between builds, so every installed app is looked in). title.keys is then taken from
+// next to the prod.keys found (find_title_keys), where these emulators keep it too.
+static void emulator_key_dirs(std::vector<std::string> &dirs) {
+    static const char *const yuzu_like[] = {"yuzu", "eden", "citron", "suyu", "sudachi", "torzu"};
+    auto add_roots = [&](const std::string &config, const std::string &data) {
+        if (!config.empty()) dirs.push_back(config + "/Ryujinx/system");
+        if (!data.empty())
+            for (const char *n : yuzu_like) dirs.push_back(data + "/" + n + "/keys");
+    };
+    if (const char *a = getenv("APPDATA")) add_roots(a, a);
+    const char *h = getenv("HOME");
+    std::string home = h && *h ? h : "";
+#if defined(__APPLE__)
+    if (!home.empty()) add_roots(home + "/Library/Application Support", home + "/Library/Application Support");
+#elif !defined(_WIN32)
+    const char *xc = getenv("XDG_CONFIG_HOME"), *xd = getenv("XDG_DATA_HOME");
+    std::string config = xc && *xc == '/' ? xc : home.empty() ? "" : home + "/.config";
+    std::string data = xd && *xd == '/' ? xd : home.empty() ? "" : home + "/.local/share";
+    add_roots(config, data);
+    if (!home.empty()) {  // (Flatpak: org.ryujinx.Ryujinx, org.yuzu_emu.yuzu, ... - each with its own XDG folders)
+        std::string apps = home + "/.var/app";
+        if (DIR *d = opendir(apps.c_str())) {
+            std::vector<std::string> ids;
+            while (struct dirent *e = readdir(d))
+                if (e->d_name[0] != '.') ids.push_back(e->d_name);
+            closedir(d);
+            std::sort(ids.begin(), ids.end());
+            for (auto &id : ids) add_roots(apps + "/" + id + "/config", apps + "/" + id + "/data");
+        }
+    }
+#endif
+    if (const char *u = getenv("USERPROFILE")) dirs.push_back(std::string(u) + "/.switch");
+    if (!home.empty()) dirs.push_back(home + "/.switch");
+}
+
 // The player's prod.keys: in the picked folder (or a few levels below it), next to the app (keys/), or where emulators
 // keep them
 static std::string find_keys(const std::string &src, std::string *bad) {
@@ -633,12 +672,7 @@ static std::string find_keys(const std::string &src, std::string *bad) {
         stack.swap(next);
     }
     std::vector<std::string> dirs = {src + "/..", "keys", "."};
-    if (const char *a = getenv("APPDATA")) {
-        dirs.push_back(std::string(a) + "/Ryujinx/system");
-        dirs.push_back(std::string(a) + "/yuzu/keys");
-    }
-    if (const char *h = getenv("USERPROFILE")) dirs.push_back(std::string(h) + "/.switch");
-    if (const char *h = getenv("HOME")) dirs.push_back(std::string(h) + "/.switch");
+    emulator_key_dirs(dirs);
     for (auto &d : dirs) {
         std::string k = keys_in_dir(d, KEYS_PROD, NULL);
         if (!k.empty()) return k;
@@ -650,7 +684,14 @@ static std::string find_keys(const std::string &src, std::string *bad) {
 static std::string find_title_keys(const std::string &src, const std::string &prod) {
     std::string dir = prod.substr(0, prod.find_last_of("/\\"));
     std::string k = keys_in_dir(dir, KEYS_TITLE, NULL);
-    return k.empty() ? keys_in_dir(src, KEYS_TITLE, NULL) : k;
+    if (k.empty()) k = keys_in_dir(src, KEYS_TITLE, NULL);
+    if (!k.empty()) return k;
+    // (prod.keys from one emulator, title.keys only in another's folder: e.g. Ryujinx's system/ and Eden's keys/)
+    std::vector<std::string> dirs;
+    emulator_key_dirs(dirs);
+    for (auto &d : dirs)
+        if (!(k = keys_in_dir(d, KEYS_TITLE, NULL)).empty()) return k;
+    return "";
 }
 
 static std::atomic<unsigned long long> g_done, g_total;  // (progress: below)
