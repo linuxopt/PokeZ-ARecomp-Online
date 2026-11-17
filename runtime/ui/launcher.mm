@@ -33,6 +33,7 @@
 #include "imgui_impl_vulkan.h"
 #endif
 #include "imgui_impl_sdl3.h"
+#include "switch_keys.h"  // (C++: keys files and the emulators' key folders)
 
 extern "C" {
 #include "platform.h"
@@ -462,7 +463,8 @@ static const char *fail_hint(int k, bool pt) {
         "with logs/launcher.log.",
         "Put the prod.keys (and title.keys) dumped from your own Switch in the folder with the game files. Any file "
         "name works (prod.keys.txt, keys.txt...): it is recognized by what is inside it. Only .nsp / .xci packages "
-        "need them; a .nup does not.",
+        "need them; a .nup does not. Keys already set up in Ryujinx, Eden, Citron, Sudachi, Suyu, Torzu or yuzu are "
+        "found automatically.",
         "The full reason is in logs/launcher.log, in the data folder."};
     static const char *const ptb[] = {
         "",
@@ -476,7 +478,8 @@ static const char *fail_hint(int k, bool pt) {
         "com o arquivo logs/launcher.log.",
         "Coloque o prod.keys (e o title.keys) do seu próprio Switch na pasta dos arquivos do jogo. Qualquer nome serve "
         "(prod.keys.txt, keys.txt...): ele é reconhecido pelo conteúdo. Só pacotes .nsp / .xci precisam delas; um .nup "
-        "não precisa.",
+        "não precisa. Chaves já configuradas no Ryujinx, Eden, Citron, Sudachi, Suyu, Torzu ou yuzu são encontradas "
+        "automaticamente.",
         "O motivo completo está em logs/launcher.log, na pasta de dados."};
     return k >= 1 && k <= 8 ? (pt ? ptb : en)[k] : "";
 }
@@ -552,107 +555,9 @@ static void find_packages(const std::string &dir, int depth, std::vector<std::st
     for (auto &s : sub) find_packages(s, depth + 1, out, compressed, need_keys);
 }
 
-// The player's keys files, told apart by what is in them, whatever they are named (prod.keys, prod.keys.txt - Windows'
-// hidden extensions -, "prod (1).keys", keys.txt...): a file named *.keys / *.key / *.txt (under 1 MB) is
-// KEYS_PROD with a header_key line, KEYS_TITLE when its lines are "<rights id> = <title key>" (32 hex digits each).
-enum { KEYS_NONE, KEYS_PROD, KEYS_TITLE };
-static bool keys_file_name(std::string n) {
-    for (auto &ch : n) ch = (char)tolower((unsigned char)ch);
-    auto ends = [&](const char *x) { size_t k = strlen(x); return n.size() > k && !n.compare(n.size() - k, k, x); };
-    return ends(".keys") || ends(".key") || ends(".txt");
-}
-static bool hex32(const std::string &s) {
-    if (s.size() != 32) return false;
-    for (char c : s)
-        if (!isxdigit((unsigned char)c)) return false;
-    return true;
-}
-static int keys_kind(const std::string &path) {
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > (1 << 20)) return KEYS_NONE;
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f) return KEYS_NONE;
-    std::string s((size_t)st.st_size, 0);
-    s.resize(fread(&s[0], 1, s.size(), f));
-    fclose(f);
-    for (auto &ch : s) ch = (char)tolower((unsigned char)ch);
-    if (s.find("header_key") != std::string::npos) return KEYS_PROD;
-    int title = 0;
-    size_t at = 0;
-    while (at < s.size()) {
-        size_t end = s.find('\n', at);
-        if (end == std::string::npos) end = s.size();
-        std::string line;
-        for (size_t i = at; i < end; i++)
-            if (!isspace((unsigned char)s[i])) line += s[i];
-        size_t eq = line.find('=');
-        if (eq != std::string::npos && hex32(line.substr(0, eq)) && hex32(line.substr(eq + 1))) title++;
-        at = end + 1;
-    }
-    return title ? KEYS_TITLE : KEYS_NONE;
-}
-
-// A keys file of that kind in dir (prod.keys / title.keys first), "" if none. bad: a keys-named file that is neither
-// (for the error: the player sees which file was looked at).
-static std::string keys_in_dir(const std::string &dir, int kind, std::string *bad) {
-    std::string named = dir + (kind == KEYS_PROD ? "/prod.keys" : "/title.keys");
-    if (keys_kind(named) == kind) return named;
-    DIR *d = opendir(dir.c_str());
-    if (!d) return "";
-    std::vector<std::string> names;
-    while (struct dirent *e = readdir(d))
-        if (e->d_name[0] != '.' && keys_file_name(e->d_name)) names.push_back(e->d_name);
-    closedir(d);
-    std::sort(names.begin(), names.end());
-    for (auto &n : names) {
-        int k = keys_kind(dir + "/" + n);
-        if (k == kind) return dir + "/" + n;
-        if (k == KEYS_NONE && bad && bad->empty()) *bad = n;
-    }
-    return "";
-}
-
-// Where Switch emulators already installed on this machine keep the player's keys (after the picked folder and keys/:
-// a prod.keys put next to the game wins). Ryujinx: <config>/Ryujinx/system; yuzu and its forks (suyu, sudachi,
-// citron, torzu, Eden): <data>/<name>/keys - %APPDATA% on Windows, $XDG_CONFIG_HOME / $XDG_DATA_HOME (~/.config,
-// ~/.local/share) on Linux, Application Support on macOS - and inside any Flatpak's sandbox (~/.var/app/<id>/config
-// and /data: the app id differs between builds, so every installed app is looked in). title.keys is then taken from
-// next to the prod.keys found (find_title_keys), where these emulators keep it too.
-static void emulator_key_dirs(std::vector<std::string> &dirs) {
-    static const char *const yuzu_like[] = {"yuzu", "eden", "citron", "suyu", "sudachi", "torzu"};
-    auto add_roots = [&](const std::string &config, const std::string &data) {
-        if (!config.empty()) dirs.push_back(config + "/Ryujinx/system");
-        if (!data.empty())
-            for (const char *n : yuzu_like) dirs.push_back(data + "/" + n + "/keys");
-    };
-    if (const char *a = getenv("APPDATA")) add_roots(a, a);
-    const char *h = getenv("HOME");
-    std::string home = h && *h ? h : "";
-#if defined(__APPLE__)
-    if (!home.empty()) add_roots(home + "/Library/Application Support", home + "/Library/Application Support");
-#elif !defined(_WIN32)
-    const char *xc = getenv("XDG_CONFIG_HOME"), *xd = getenv("XDG_DATA_HOME");
-    std::string config = xc && *xc == '/' ? xc : home.empty() ? "" : home + "/.config";
-    std::string data = xd && *xd == '/' ? xd : home.empty() ? "" : home + "/.local/share";
-    add_roots(config, data);
-    if (!home.empty()) {  // (Flatpak: org.ryujinx.Ryujinx, org.yuzu_emu.yuzu, ... - each with its own XDG folders)
-        std::string apps = home + "/.var/app";
-        if (DIR *d = opendir(apps.c_str())) {
-            std::vector<std::string> ids;
-            while (struct dirent *e = readdir(d))
-                if (e->d_name[0] != '.') ids.push_back(e->d_name);
-            closedir(d);
-            std::sort(ids.begin(), ids.end());
-            for (auto &id : ids) add_roots(apps + "/" + id + "/config", apps + "/" + id + "/data");
-        }
-    }
-#endif
-    if (const char *u = getenv("USERPROFILE")) dirs.push_back(std::string(u) + "/.switch");
-    if (!home.empty()) dirs.push_back(home + "/.switch");
-}
-
-// The player's prod.keys: in the picked folder (or a few levels below it), next to the app (keys/), or where emulators
-// keep them
+// The player's prod.keys: in the picked folder (or a few levels below it), next to it or the app (keys/), else the one
+// an installed Switch emulator holds (switch_keys.h: Ryujinx, the yuzu family, their Flatpaks, RetroDECK; the newest
+// firmware's when several have them). The player's own copy next to the dump wins over any emulator's.
 static std::string find_keys(const std::string &src, std::string *bad) {
     std::vector<std::string> stack = {src, src + "/keys"};
     for (int depth = 0; depth < 3; depth++) {
@@ -671,27 +576,27 @@ static std::string find_keys(const std::string &src, std::string *bad) {
         std::sort(next.begin(), next.end());
         stack.swap(next);
     }
-    std::vector<std::string> dirs = {src + "/..", "keys", "."};
-    emulator_key_dirs(dirs);
-    for (auto &d : dirs) {
+    for (const std::string &d : {src + "/..", std::string("keys"), std::string(".")}) {
         std::string k = keys_in_dir(d, KEYS_PROD, NULL);
         if (!k.empty()) return k;
     }
-    return "";
+    int found = 0;
+    std::string k = find_emulator_keys(emulator_key_dirs(), &found);
+    if (!k.empty())
+        rt_launcher_log("[launcher] prod.keys from an installed emulator (%d found, newest firmware's): %s\n", found,
+                        k.c_str());
+    return k;
 }
 
-// title.keys (only needed for packages without their tickets): next to prod.keys or in the picked folder
+// title.keys (only needed for packages without their tickets): next to prod.keys, in the picked folder, else an
+// installed emulator's (one emulator's prod.keys can come without its title.keys - Ryujinx keeps none of its own)
 static std::string find_title_keys(const std::string &src, const std::string &prod) {
     std::string dir = prod.substr(0, prod.find_last_of("/\\"));
     std::string k = keys_in_dir(dir, KEYS_TITLE, NULL);
     if (k.empty()) k = keys_in_dir(src, KEYS_TITLE, NULL);
-    if (!k.empty()) return k;
-    // (prod.keys from one emulator, title.keys only in another's folder: e.g. Ryujinx's system/ and Eden's keys/)
-    std::vector<std::string> dirs;
-    emulator_key_dirs(dirs);
-    for (auto &d : dirs)
-        if (!(k = keys_in_dir(d, KEYS_TITLE, NULL)).empty()) return k;
-    return "";
+    for (auto &d : emulator_key_dirs())
+        if (k.empty()) k = keys_in_dir(d, KEYS_TITLE, NULL);
+    return k;
 }
 
 static std::atomic<unsigned long long> g_done, g_total;  // (progress: below)
