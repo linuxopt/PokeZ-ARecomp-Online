@@ -1620,12 +1620,17 @@ static uint64_t party_texture(const void *rgba, int w, int h);
 
 // ---- the background: use the supplied Lumiose artwork, with the original art as a fallback.
 // drawn to cover the window (a 1280 x 720 picture, cropped to the window's shape)
+// (file scope, not function statics: on Vulkan the texture is a descriptor set from the ImGui backend's pool, which
+// goes with the backend when the game starts - reset below, like the team icons, or "return to the start screen" drew
+// the next start screen's background through a freed set and RADV crashed in ImGui_ImplVulkan_RenderDrawData)
+static uint64_t g_art_texture;
+static int g_art_width, g_art_height;
+static bool g_art_attempted;
 static void draw_art(ImDrawList *dl, ImVec2 o, ImVec2 ds) {
-    static uint64_t texture;
-    static int width, height;
-    static bool attempted;
-    if (!attempted) {
-        attempted = true;
+    uint64_t &texture = g_art_texture;
+    int &width = g_art_width, &height = g_art_height;
+    if (!g_art_attempted) {
+        g_art_attempted = true;
         SDL_IOStream *input = SDL_IOFromConstMem(lumiose_background_png, sizeof lumiose_background_png);
         SDL_Surface *decoded = input ? SDL_LoadPNG_IO(input, true) : NULL;
         SDL_Surface *pixels = decoded ? SDL_ConvertSurface(decoded, SDL_PIXELFORMAT_ABGR8888) : NULL;
@@ -3281,6 +3286,7 @@ extern "C" void launcher_run(const char *root) {
     // start screen" the next start screen drew them through freed sets and NVIDIA's driver crashed at 0x104, #142.
     // Made again from the PNGs next time; their few small images stay allocated - a handful per return)
     g_party_icons.clear();
+    g_art_texture = 0, g_art_attempted = false;  // (the background art too: made again from the PNG next time)
     vk_imgui_backend_shutdown();
 #endif
     ImGui_ImplSDL3_Shutdown();
