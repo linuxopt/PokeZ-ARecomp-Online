@@ -1,12 +1,18 @@
-name: Lumiose Linux package (safe updater and bundled mod)
+name: Lumiose Linux package (safe updater, bundled mod and AppImage installer)
+# The portable folder as a zip (what the start screen's Linux updater installs) and the same folder as a one-file
+# AppImage that installs and starts it (tools/lumiose/appimage_linux.sh). A published release gets both attached.
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   push:
     branches: [codex/steamdeck-zig-probe, pokemon-za]
-    paths: ['.github/workflows/lumiose-linux-package.yml']
+    paths: ['.github/workflows/lumiose-linux-package.yml', 'tools/lumiose/appimage/**', 'tools/lumiose/appimage_linux.sh']
 jobs:
   package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # (release uploads)
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -36,9 +42,37 @@ jobs:
             mkdir -p "$copy/usr/bin/save"
             echo preserved > "$copy/usr/bin/save/main"
             LUMIOSE_UPDATE_SMOKE_ROOT="$copy" LUMIOSE_UPDATE_SMOKE_ZIP="$PWD/Lumiose-Online-linux-experimental.zip" \
-              PYTHONPATH="$d/tools/lumiose" "$d/python/bin/python3.12" -c "import os; from pathlib import Path; import linux_launcher_update as u; root=Path(os.environ[\"LUMIOSE_UPDATE_SMOKE_ROOT\"]); u.install(root, os.environ[\"LUMIOSE_UPDATE_SMOKE_ZIP\"]); assert (root / \"usr/bin/save/main\").read_text().strip() == \"preserved\"; print(\"Full package update preserved the save\")"'
+              PYTHONPATH="$d/tools/lumiose" "$d/python/bin/python3.12" -c "import os; from pathlib import Path; import linux_launcher_update as u; root=Path(os.environ[\"LUMIOSE_UPDATE_SMOKE_ROOT\"]); u.install(root, os.environ[\"LUMIOSE_UPDATE_SMOKE_ZIP\"]); assert (root / \"usr/bin/save/main\").read_text().strip() == \"preserved\"; print(\"Full package update preserved the save\")"
+            cd /src
+            bash tools/lumiose/appimage_linux.sh
+            # The AppImage as a player starts it, without FUSE (extract-and-run): install, keep a save through a
+            # same-version repair (the folder updater), and the menu entry pointing at the installed copy.
+            img=$(ls build/dist/Lumiose-Online-*-x86_64.AppImage)
+            h="$PWD/build/linux/appimage-smoke"
+            rm -rf "$h" && mkdir -p "$h"
+            HOME="$h" XDG_DATA_HOME="$h/share" APPIMAGE_EXTRACT_AND_RUN=1 "$img" --install </dev/null
+            inst="$h/share/lumiose-online"
+            test -x "$inst/Lumiose Online" && test -x "$inst/usr/bin/lasrecomp"
+            grep -q "^Exec=\"$inst/Lumiose Online\"" "$h/share/applications/lumiose-online.desktop"
+            mkdir -p "$inst/usr/bin/save" && echo preserved > "$inst/usr/bin/save/main"
+            HOME="$h" XDG_DATA_HOME="$h/share" APPIMAGE_EXTRACT_AND_RUN=1 "$img" --repair </dev/null
+            HOME="$h" XDG_DATA_HOME="$h/share" APPIMAGE_EXTRACT_AND_RUN=1 "$img" --install </dev/null
+            test "$(cat "$inst/usr/bin/save/main")" = preserved
+            echo "AppImage installs, repairs and keeps the save."'
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" --clobber -R "${{ github.repository }}" \
+            build/dist/Lumiose-Online-linux-experimental.zip build/dist/Lumiose-Online-*-x86_64.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: Lumiose-Online-linux-experimental
           path: build/dist/Lumiose-Online-linux-experimental.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lumiose-Online-linux-AppImage
+          path: build/dist/Lumiose-Online-*-x86_64.AppImage
           if-no-files-found: error

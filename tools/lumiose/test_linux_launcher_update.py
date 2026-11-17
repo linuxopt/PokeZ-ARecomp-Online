@@ -128,4 +128,50 @@ class LinuxLauncherUpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Invalid release tag'):
             update.download_release('../other', self.archive)
 
+    def folder(self, additions=None, links=None):
+        """An unpacked package folder, as the AppImage installer carries it (read-only files, like squashfs)."""
+        src = Path(self.temp.name) / 'payload'
+        for rel, content in {**self.essential, **(additions or {})}.items():
+            path = src / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            path.chmod(0o555)
+        for rel, target in (links or {}).items():
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(target, src / rel)
+        return src
+
+    def test_folder_install_preserves_player_data(self):
+        src = self.folder({'usr/lib/libexample.so.1': b'library', 'usr/bin/lumiose/subsdk9': b'release mod'},
+                          {'usr/lib/libexample.so': 'libexample.so.1'})
+        update.install(self.root, src)
+        self.assertEqual((self.root / 'usr/bin/lasrecomp').read_bytes(), b'new executable')
+        self.assertEqual((self.root / 'usr/bin/save/main').read_bytes(), b'player save')
+        self.assertEqual((self.root / 'usr/bin/larecomp.ini').read_bytes(), b'player settings')
+        self.assertEqual((self.root / 'usr/bin/lumiose/subsdk9').read_bytes(), b'active or reference mod')
+        self.assertEqual(os.readlink(self.root / 'usr/lib/libexample.so'), 'libexample.so.1')
+        self.assertTrue(os.access(self.root / 'Lumiose Online', os.X_OK))
+        self.assertTrue(os.access(self.root / 'usr/bin/lasrecomp', os.W_OK))  # (a later update can replace it)
+        self.assertFalse((self.root / '.lumiose-update').exists())
+
+    def test_folder_install_rejects_protected_and_escaping_files(self):
+        with self.assertRaisesRegex(RuntimeError, 'protected'):
+            update.install(self.root, self.folder({'usr/bin/save/main': b'overwrite'}))
+        self.assertEqual((self.root / 'usr/bin/save/main').read_bytes(), b'player save')
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        self.temp, keep = other, self.temp
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'escapes'):
+                update.install(self.root, self.folder(links={'usr/lib/evil.so': '../../../outside'}))
+        finally:
+            self.temp = keep
+        self.assertEqual((self.root / 'usr/bin/lasrecomp').read_bytes(), b'old executable')
+
+    def test_folder_install_requires_launcher_files(self):
+        src = self.folder()
+        (src / 'usr/bin/lasrecomp').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'missing required'):
+            update.install(self.root, src)
+
 if __name__ == '__main__': unittest.main()

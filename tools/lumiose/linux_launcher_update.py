@@ -22,6 +22,8 @@ PROGRAM_FILES = {'lasrecomp', 'icon.png', 'za-default.ini', 'LICENSE', 'README.m
                  'README-Windows-reference.md', 'RNNOISE-LICENSE.txt', 'Baloo2-OFL.txt', 'Baloo2-SemiBold.ttf',
                  'BIZUDPGothic-OFL.txt', 'BIZUDPGothic-Regular.ttf', 'DejaVu-LICENSE.txt',
                  'DejaVuSans.ttf', 'DejaVuSans-Bold.ttf'}
+REQUIRED = {'Lumiose Online', 'usr/bin/lasrecomp', 'usr/bin/python/bin/python3.12',
+            'usr/bin/tools/lumiose/entry.py', 'usr/bin/tools/lumiose/linux_launcher_update.py'}
 
 
 def allowed(path):
@@ -67,9 +69,7 @@ def stage_archive(archive, stage):
             if total > MAX_BYTES or info.file_size > MAX_BYTES: raise RuntimeError('Update archive is too large')
             if stat.S_ISLNK(mode): links.add(raw)
             files.append((info, raw, mode))
-        names = {name for _, name, _ in files}
-        if not {'Lumiose Online', 'usr/bin/lasrecomp', 'usr/bin/python/bin/python3.12',
-                'usr/bin/tools/lumiose/entry.py', 'usr/bin/tools/lumiose/linux_launcher_update.py'} <= names:
+        if not REQUIRED <= {name for _, name, _ in files}:
             raise RuntimeError('Update is missing required launcher files')
         for _, name, _ in files:
             parents = PurePosixPath(name).parents
@@ -88,6 +88,43 @@ def stage_archive(archive, stage):
                 with z.open(info) as src, out.open('xb') as dest: shutil.copyfileobj(src, dest, 1024 * 1024)
                 os.chmod(out, (mode & 0o777) or 0o644)
     return [name for _, name, _ in files]
+
+
+def stage_directory(source, stage):
+    """Stage an unpacked package folder (the AppImage installer's payload) with the same rules as a release zip."""
+    source = Path(source).resolve()
+    files, total = [], 0
+    for dirpath, dirnames, filenames in os.walk(source):
+        here = Path(dirpath)
+        # A symbolic-link directory would be walked as a link entry below, not followed (as a zip stores it).
+        for d in list(dirnames):
+            if (here / d).is_symlink():
+                dirnames.remove(d)
+                filenames.append(d)
+        for fname in filenames:
+            src = here / fname
+            raw = src.relative_to(source).as_posix()
+            if raw == 'usr/bin/lumiose/subsdk9': continue  # (see stage_archive: the player's active or reference mod)
+            if not allowed(raw): raise RuntimeError('Package contains an unexpected or protected file: ' + raw)
+            out = stage / raw
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_symlink():
+                target = os.readlink(src)
+                resolved = posixpath.normpath(posixpath.join(posixpath.dirname(raw), target))
+                if target.startswith('/') or resolved == '..' or resolved.startswith('../'):
+                    raise RuntimeError('A package symbolic link escapes its package')
+                os.symlink(target, out)
+            elif src.is_file():
+                total += src.stat().st_size
+                if total > MAX_BYTES: raise RuntimeError('Update package is too large')
+                shutil.copyfile(src, out)
+                # (the AppImage's files can be read-only: the installed copy must stay updatable by its owner)
+                os.chmod(out, (src.stat().st_mode & 0o777) | 0o200)
+            else:
+                raise RuntimeError('Package contains an unsupported file type')
+            files.append(raw)
+    if not REQUIRED <= set(files): raise RuntimeError('Update is missing required launcher files')
+    return files
 
 
 def write_journal(path, entries):
@@ -131,6 +168,7 @@ def recover(root):
 
 
 def install(root, archive, fail_after=None):
+    """Install a release zip, or an unpacked package folder, over root; player data is never touched."""
     root = Path(root).resolve()
     archive = Path(archive).resolve()
     work = root / '.lumiose-update'
@@ -139,7 +177,7 @@ def install(root, archive, fail_after=None):
     stage, backup = work / 'stage', work / 'backup'
     stage.mkdir(parents=True)
     try:
-        files = stage_archive(archive, stage)
+        files = stage_directory(archive, stage) if archive.is_dir() else stage_archive(archive, stage)
         entries = []
         for rel in files:
             safe_parent(root, rel)
@@ -203,10 +241,17 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--recover', action='store_true')
     parser.add_argument('--tag')
+    parser.add_argument('--from-dir', type=Path, help='install this unpacked package folder (the AppImage payload)')
     args = parser.parse_args()
     root = args.root.resolve()
     if args.recover:
         if recover(root): print('Recovered the previous launcher after an interrupted update.')
+        return
+    if args.from_dir:
+        if not args.from_dir.is_dir(): raise RuntimeError('The package folder does not exist')
+        print('Installing launcher files...', flush=True)
+        install(root, args.from_dir)
+        print('Launcher files installed.', flush=True)
         return
     if not args.tag: raise RuntimeError('A release tag is required')
     download = root / '.lumiose-update-download.zip'

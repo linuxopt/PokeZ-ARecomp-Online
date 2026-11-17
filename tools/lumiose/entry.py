@@ -27,9 +27,16 @@ def log_event(message):
 
 def desktop_notice(title, message, error=False):
     if os.name == 'nt': return
-    command = shutil.which('kdialog') if error else shutil.which('notify-send')
-    if command:
-        args = [command, '--error', title + '\n\n' + message] if error else [command, title, message]
+    # Errors in a dialog the player has to close: kdialog on KDE / the Steam Deck, zenity on GNOME and most others
+    # (no terminal shows the message when started from the menu); notify-send as the last resort.
+    args = None
+    if error and shutil.which('kdialog'):
+        args = [shutil.which('kdialog'), '--title', title, '--error', message]
+    elif error and shutil.which('zenity'):
+        args = [shutil.which('zenity'), '--error', '--no-wrap', '--no-markup', '--title', title, '--text', message]
+    elif shutil.which('notify-send'):
+        args = [shutil.which('notify-send')] + (['-u', 'critical'] if error else []) + [title, message]
+    if args:
         try: subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError: pass
 

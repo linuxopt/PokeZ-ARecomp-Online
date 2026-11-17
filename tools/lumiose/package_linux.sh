@@ -36,7 +36,10 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$HERE/.lumiose-update/journal.json" ]; then
   BACKUP="$HERE/.lumiose-update/backup/usr/bin"
   "$BACKUP/python/bin/python3.12" "$BACKUP/tools/lumiose/linux_launcher_update.py" --root "$HERE" --recover || {
-    command -v kdialog >/dev/null 2>&1 && kdialog --error 'The interrupted update could not be restored. Your game and saves were not changed.'
+    MSG='The interrupted update could not be restored. Your game and saves were not changed.'
+    if command -v kdialog >/dev/null 2>&1; then kdialog --title 'Lumiose Online' --error "$MSG"
+    elif command -v zenity >/dev/null 2>&1; then zenity --error --title='Lumiose Online' --text="$MSG"
+    else echo "$MSG" >&2; fi
     exit 1
   }
 fi
