@@ -58,14 +58,22 @@ jobs:
             HOME="$h" XDG_DATA_HOME="$h/share" APPIMAGE_EXTRACT_AND_RUN=1 "$img" --repair </dev/null
             HOME="$h" XDG_DATA_HOME="$h/share" APPIMAGE_EXTRACT_AND_RUN=1 "$img" --install </dev/null
             test "$(cat "$inst/usr/bin/save/main")" = preserved
-            echo "AppImage installs, repairs and keeps the save."'
+            echo "AppImage installs, repairs and keeps the save."
+            # The same folder as a .tar.gz (keeps modes and links without unzip quirks; the zip stays: the in-app
+            # updater looks for it by name) and the source this was built from. No game files in either.
+            ver=$(sed -n "s/^LAUNCHER_VERSION = .\(v[0-9.]*\).*/\1/p" tools/lumiose/entry.py)
+            test -n "$ver"
+            tar -C build/dist -czf "build/dist/Lumiose-Online-$ver-linux-x86_64.tar.gz" "Lumiose Online Linux"
+            git archive --format=tar.gz --prefix="PokeZ-ARecomp-Online-$ver/" -o "build/dist/PokeZ-ARecomp-Online-$ver-src.tar.gz" HEAD
+            ls -la build/dist/*.tar.gz'
       - name: Attach to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" --clobber -R "${{ github.repository }}" \
-            build/dist/Lumiose-Online-linux-experimental.zip build/dist/Lumiose-Online-*-x86_64.AppImage
+            build/dist/Lumiose-Online-linux-experimental.zip build/dist/Lumiose-Online-*-x86_64.AppImage \
+            build/dist/Lumiose-Online-*-linux-x86_64.tar.gz build/dist/PokeZ-ARecomp-Online-*-src.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: Lumiose-Online-linux-experimental
@@ -75,4 +83,11 @@ jobs:
         with:
           name: Lumiose-Online-linux-AppImage
           path: build/dist/Lumiose-Online-*-x86_64.AppImage
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lumiose-Online-linux-tar.gz-and-source
+          path: |
+            build/dist/Lumiose-Online-*-linux-x86_64.tar.gz
+            build/dist/PokeZ-ARecomp-Online-*-src.tar.gz
           if-no-files-found: error
