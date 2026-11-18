@@ -517,6 +517,8 @@ static unsigned long long free_space(const char *dir) {
 #endif
 }
 
+unsigned long long rt_free_space(const char *dir) { return free_space(dir); }
+
 static unsigned long long entries_size(const char *dir) {
     unsigned long long n = 0;
     for (size_t i = 0; i < N_ENTRIES; i++) {

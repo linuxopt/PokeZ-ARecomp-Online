@@ -57,6 +57,7 @@ void rt_paths_restart(void);
 // A shipped file: `name` next to the executable or in Contents/Resources, else `dev_rel` in the source tree (the
 // starting directory or the executable's parent; NULL = shipped builds only). Absolute path in out; false = none.
 bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n);
+unsigned long long rt_free_space(const char *dir);  // bytes free to us on dir's drive (0: unknown)
 
 // The only way the app deletes game files. Removes the named entry of game_dir (an extracted/ folder) only if
 // game_dir is <data root>/extracted itself (symlinks resolved; a symlinked extracted/ is refused) and the entry is

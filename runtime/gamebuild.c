@@ -320,6 +320,11 @@ static void helper_failed(const char *what, int r, const char *log, char *why, s
         snprintf(why, why_size, "A build helper stopped as soon as it started. An antivirus or Windows' exploit protection can "
                  "do this: add the ZA Recomp folder as an exception and try again.");
         g_killed = true;
+    } else if (strlen(why) < why_size - 8) {
+        // (a helper that said why: its last line goes with the reason on the start screen too, not only in the log -
+        // Steam Deck players saw only the "about 4 GB free" hint with 100+ GB free, and nothing of what failed)
+        size_t n = strlen(why);
+        snprintf(why + n, why_size - n, ": %s", last);
     }
     LOG("[gamebuild] %s failed: %s%s%s\n", what, how, how[0] && last[0] ? ": " : "", last);
 }

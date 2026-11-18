@@ -437,6 +437,7 @@ static void set_job(const std::string &s, bool failed = false, const std::string
 // job line keeps the English (the log, tests); the start screen shows fail_head / fail_hint in its language.
 enum { FAIL_NOT_FOUND = 1, FAIL_UNUSABLE, FAIL_COPY, FAIL_VERSION, FAIL_MISSING, FAIL_BUILD, FAIL_KEYS, FAIL_IMPORT };
 static int g_fail;                 // the last failure's kind (0: none)
+static bool g_fail_disk_ok;        // FAIL_BUILD with 4 GB+ free on the data folder's drive: not the disk-space hint
 static std::string g_fail_detail;  // (from zaimport or the check: technical, as it came)
 static const char *fail_head(int k, bool pt) {
     static const char *const en[] = {"", "No game files found in that folder", "Those files can't be used",
@@ -481,6 +482,11 @@ static const char *fail_hint(int k, bool pt) {
         "não precisa. Chaves já configuradas no Ryujinx, Eden, Citron, Sudachi, Suyu, Torzu ou yuzu são encontradas "
         "automaticamente.",
         "O motivo completo está em logs/launcher.log, na pasta de dados."};
+    if (k == FAIL_BUILD && g_fail_disk_ok)
+        return pt ? "Há espaço livre suficiente, então o motivo está acima e em logs/launcher.log, na pasta de dados. Se "
+                    "continuar, relate o problema no Discord do LumioseOnline com esse arquivo."
+                  : "There's enough free space, so the reason is above and in logs/launcher.log, in the data folder. If it "
+                    "keeps happening, report it in the LumioseOnline Discord with that file.";
     return k >= 1 && k <= 8 ? (pt ? ptb : en)[k] : "";
 }
 static void set_failure(int k, const std::string &detail = "") {
@@ -823,7 +829,13 @@ static bool build_game_code(void) {
     if (!ok) {
         rt_launcher_log("[launcher] game code: %s\n", why);
         if (g_cancel_build) set_job("Compilation cancelled. Completed files are kept.");
-        else set_failure(FAIL_BUILD, gamebuild_killed() ? why : "");
+        else {
+            // (free space looked up, not assumed: the hint said "make sure there's about 4 GB free" for every failure)
+            unsigned long long avail = rt_free_space(g_root.c_str());
+            g_fail_disk_ok = avail >= (4ull << 30);
+            rt_launcher_log("[launcher] game code: %llu MB free on the data folder's drive\n", avail >> 20);
+            set_failure(FAIL_BUILD, why);
+        }
     }
     return ok;
 }
@@ -2396,7 +2408,10 @@ extern "C" void launcher_run(const char *root) {
         if (pg && !strncmp(pg + 1, "setup", 5)) g_changing_folder = true;
         if (pg && !strncmp(pg + 1, "extracting", 10)) test_busy = true;
         if (pg && !strncmp(pg + 1, "ready", 5)) status.clear();  // (the ready page without a built game library)
-        if (pg && !strncmp(pg + 1, "fail", 4)) g_changing_folder = true, set_failure(atoi(pg + 5));  // (the failure messages)
+        if (pg && !strncmp(pg + 1, "fail", 4)) {  // (the failure messages; fail6ok: a build failure with space enough)
+            g_changing_folder = true, g_fail_disk_ok = strstr(pg, "ok") != NULL;
+            set_failure(atoi(pg + 5), g_fail_disk_ok ? "the game code didn't compile: error: (the compiler's last line)" : "");
+        }
         if (pg && !strncmp(pg + 1, "tip", 3)) g_settings.menu_tip_seen = false, g_tip_test = true;
         if (pg && !strncmp(pg + 1, "aspect", 6)) g_settings.aspect_asked = g_settings.menu_tip_seen = false, g_tip_test = true;
         if (pg && !strncmp(pg + 1, "video", 5)) g_settings.video_rec = VREC_ASK, g_video_test = true;
